@@ -28,27 +28,53 @@ class RoverEnv(gym.Env):
         self.d_safe = self.R + (np.sqrt(2)/2)*self.W # minimum safe distance from the center of a boulder to the center of the rover
         self.r_boundary = self.W / np.sqrt(2) # minimum distance from the center of the rover to the boundary of the map to avoid collision with the boulders
 
-        # motion parameters
-        self.v = 0.25 # forward velocity of the rover (m/step)
-        self.omega = np.deg2rad(10) # rotation per step (radians/step)
+        # motion parameters. motion limits for PPO
+        self.v_max = 0.5 # forward velocity of the rover (m/step)
+        self.omega_max = 2.0 # rotation per step (radians/step)
         
         # state of the rover
-        self.x = 0.0 # x-coordinate of the rover's center
-        self.y = 0.0 # y-coordinate of the rover's center
-        self.theta = 0.0 # orientation of the rover (radians)
+        self.x = None # x-coordinate of the rover's center
+        self.y = None # y-coordinate of the rover's center
+        self.theta = None # orientation of the rover (radians)
         self.goal = None # target region center (x_T, y_T)
 
-        self.lidar_reading = np.array([0.0,0.0], dtype=np.float32) # point detected by the lidar (relative to the rover's center)
+        # action space [v, omega]: forward velocity and rotation
+        self.action_space = spaces.Box(
+            low=np.array([-1.0, -1.0], dtype=np.float32),
+            high=np.array([1.0, 1.0], dtype=np.float32),
+            dtype=np.float32,
+        )
 
-        self.action_space = gym.spaces.Discrete(4)  # 4 possible actions: up, down, left, right
+        # observation space: [x, y, theta, x_T, y_T, d_edge, d_unit_x, d_unit_y]
+        self.observation_space = gym.spaces.Box(
+            low=np.array([0.0, 0.0, -np.pi, 0.0, 0.0, 0.0, -1, -1], dtype=np.float32),
+            high=np.array([self.L, self.L, np.pi, self.L, self.L, self.L, 1, 1], dtype=np.float32),
+            dtype=np.float32,
+        )
 
+        # time step limit
+        self.dt = 0.1 # time step duration (seconds)
+
+        # initialization contraints
+        self.min_target_dist = self.W/2.0 # minimum distance between the target region and any boulder
+        self.min_boulder_dist = 1.5 * (2 * self.R + self.W) # minimum distance between any two boulders to avoid overlap
 
         # rendering parameters
         self.render_mode = render_mode
         self.screen = None
         self.clock = None
         self.scale = 30  # scale for rendering (pixels per meter)
+
+    '''
+    Helper functions
+    '''
+    def _dist(self, p1, p2):
+        return np.hypot(p1[0] - p2[0], p1[1] - p2[1])
     
+    def _sample_point(self):
+        return self.np_random.uniform(self.r_boundary, self.L - self.r_boundary, size=2)
+
+
     '''
     Reset the state of the environment to an initial state
     Return the initial observation
@@ -56,23 +82,40 @@ class RoverEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # rover pose
-        self.x = self.np_random.uniform(self.r_boundary, self.L - self.r_boundary)
-        self.y = self.np_random.uniform(self.r_boundary, self.L - self.r_boundary)
+        # rover position and orientation
+        self.x = self._sample_point()
+        self.y = self._sample_point()
         self.theta = self.np_random.uniform(-np.pi, np.pi)
 
-        # target center
-        self.goal = self.np_random.uniform(self.r_boundary, self.L - self.r_boundary, size=2)
+        # target position (ensure it's not too close to the boundary to allow the rover to fit)
+        while True:
+            self.goal = self._sample_point()
+            if self._dist(self.goal, [self.x, self.y]) > self.min_target_dist:
+                break
 
-        # boulder's positions
-        self.boulders = self.np_random.uniform(
-            self.R + self.d_safe,
-            self.L - self.R - self.d_safe,
-            size=(self.N, 2)
-        )
+        # boulder's placement with constraints
+        self.boulders = []
+        for i in range(self.N):
+            while True:
+                boulder_pos = self._sample_point()
 
-        # initial lidar reading (relative to the rover's center)
-        self.lidar_reading = self._compute_lidar_reading()
+                # check distance from target region
+                if self._dist(boulder_pos, self.goal) < self.min_target_dist:
+                    continue
+
+                # check distance from rover's initial position
+                if self._dist(boulder_pos, [self.x, self.y]) < self.min_target_dist:
+                    continue
+
+                # check distance from other boulders
+                if any(self._dist(boulder_pos, existing) < self.min_boulder_dist for existing in self.boulders):
+                    continue
+
+                self.boulders.append(boulder_pos)
+                break
+
+        # initial boulder features (relative to the rover's center)
+        self.d_edge, self.d_unit = self._compute_boulder_features()
 
         obs = self._get_obs()
 
@@ -81,24 +124,73 @@ class RoverEnv(gym.Env):
 
         return obs, {}
 
+
     '''
-    Execute one time step within the environment
+    Step with continuous action input [v, omega]: forward velocity and rotation
     '''
     def step(self, action):
-        # Execute one time step within the environment
-        # Return observation, reward, done, info
-        pass
+        # neural network output to normalized wheel commands
+        u_R = float(np.clip(action[0], -1.0, 1.0))
+        u_L = float(np.clip(action[1], -1.0, 1.0))
 
-    '''
-     Render the environment to the screen
-    '''
-    def render(self):
-        if self.render_mode == "rgb_array":
-            return self._render_frame()
-        elif self.render_mode == "human":
+        # convert normalized commands to wheel angular velocities
+        omega_R = self.omega_max * u_R
+        omega_L = self.omega_max * u_L
+
+        # convert wheel angular velocities to rover's linear and angular velocity
+        # self.wr = 0.25 wheel radius, self.rW = 2.0 rover width
+        v = self.wr * (omega_R + omega_L) / 2.0
+        omega = self.wr * (omega_R - omega_L) / self.rW
+
+        # unicycle model for rover motion
+        self.x += v * math.cos(self.theta) * self.dt
+        self.y += v * math.sin(self.theta) * self.dt
+        self.theta += omega * self.dt
+        # normalize heading angle to [-pi, pi]
+        self.theta = (self.theta + np.pi) % (2 * np.pi) - np.pi
+
+        # base reward is negative distance to the target
+        reward = -0.01
+        terminated = False
+        truncated = False
+
+        # target check
+        if self._in_target_region():
+            reward = 200.0
+            terminated = True
+
+        # collision check
+        if self._obstabcle_collision() or self._boundary_collision():
+            reward = -200.0
+            terminated = True
+
+        obs = self._get_obs()
+
+        if self.render_mode == "human":
             self._render_frame()
 
+        return obs, reward, terminated, truncated, {}
+
+
+    '''
+    Check for target region
+    '''
+    def _in_target_region(self):
+        half_T = self.T / 2.0
+        return (
+            self.goal[0] - half_T <= self.x <= self.goal[0] + half_T and
+            self.goal[1] - half_T <= self.y <= self.goal[1] + half_T
+        )
+
+
+    '''
+    Clean up resources when the environment is closed
+    '''
     def close(self):
+        if self.screen is not None:
+            pygame.quit()
+            self.screen = None
+            self.clock = None
         return super().close()
 
 
@@ -106,7 +198,20 @@ class RoverEnv(gym.Env):
     Function to get the current observation of the environment
     '''
     def _get_obs(self):
-        return np.array([self.x, self.y, self.theta, self.goal[0], self.goal[1]], dtype=np.float32)
+        d_edge, d_unit = self._compute_boulder_features()
+
+        return np.array(
+            [   self.x,
+                self.y,
+                self.theta,
+                self.goal[0],
+                self.goal[1],
+                d_edge,
+                d_unit[0],
+                d_unit[1]
+            ],
+            dtype=np.float32)
+
 
     '''
     Functions for collision detection
@@ -118,30 +223,54 @@ class RoverEnv(gym.Env):
                 return True
         return False
     
+
     '''
-    Function to compute the lidar reading (relative to the rover's center)
+    Check for collision with the boundary of the map
     '''
-    def _compute_lidar_reading(self):
-        nearest_point = np.array([self.x, self.y], dtype=np.float32)
+    def _boundary_collision(self):
+        return (
+            self.x < self.r_boundary or
+            self.x > self.L - self.r_boundary or
+            self.y < self.r_boundary or
+            self.y > self.L - self.r_boundary
+        )
+    
+
+    '''
+    Calculating boulder features: distance to the nearest boulder edge and unit vector pointing to the nearest boulder (relative to the rover's center)
+    '''
+    def _compute_boulder_features(self):
         nearest_dist = float('inf')
+        nearest_vec = np.array([0.0, 0.0], dtype=np.float32)
 
         for bx, by in self.boulders:
-            dx = self.x - bx
-            dy = self.y - by
-            dist = math.hypot(dx, dy)
+            vec = np.array([bx - self.x, by - self.y], dtype=np.float32)
+            dist_center = np.linalg.norm(vec)
 
-            if dist == 0:
-                continue
+            if dist_center < nearest_dist:
+                nearest_dist = dist_center
+                nearest_vec = vec
 
-            # closest point on boulder surface
-            px = bx + (self.R * dx / dist)
-            py = by + (self.R * dy / dist)
+        # distance to boulder edge
+        d_edge = nearest_dist - self.R
 
-            if dist < nearest_dist:
-                nearest_dist = dist
-                nearest_point = np.array([px, py], dtype=np.float32)
+        # unit vector to boulder
+        if nearest_dist > 0:
+            d_unit = nearest_vec / nearest_dist
+        else:
+            d_unit = np.array([0.0, 0.0], dtype=np.float32)
 
-        return nearest_point
+        return float(d_edge), d_unit.astype(np.float32)
+
+
+    '''
+     Render the environment to the screen
+    '''
+    def render(self):
+        if self.render_mode == "rgb_array":
+            return self._render_frame()
+        elif self.render_mode == "human":
+            self._render_frame()
 
     def _render_frame(self):
         if self.screen is None:
@@ -178,10 +307,10 @@ class RoverEnv(gym.Env):
         )
         pygame.draw.rect(self.screen, (0, 0, 255), rover_rect)  # blue rover
 
-        # draw lidar reading
-        lidar_x = int((self.x + self.lidar_reading[0]) * self.scale)
-        lidar_y = int((self.y + self.lidar_reading[1]) * self.scale)
-        pygame.draw.circle(self.screen, (255, 0, 0), (lidar_x, lidar_y), 5)  # red lidar point
+        # draw boulder features
+        boulder_x = int((self.x + self.d_unit[0] * self.d_edge) * self.scale)
+        boulder_y = int((self.y + self.d_unit[1] * self.d_edge) * self.scale)
+        pygame.draw.circle(self.screen, (255, 0, 0), (boulder_x, boulder_y), 5)  # red boulder feature point
 
         if self.render_mode == "human":
             pygame.display.flip()
