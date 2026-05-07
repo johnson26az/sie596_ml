@@ -59,7 +59,7 @@ class RoverEnv(gym.Env):
         self.dt = 0.1 # time step duration (seconds)
 
         # initialization contraints
-        self.min_target_dist = self.W/2.0 # minimum distance between the target region and any boulder
+        self.min_target_dist = 1.5 * (2 * self.R + self.W) # minimum distance between the target region and any boulder
         self.min_boulder_dist = 1.5 * (2 * self.R + self.W) # minimum distance between any two boulders to avoid overlap
         self.max_time = max_time
 
@@ -351,14 +351,19 @@ class RoverEnv(gym.Env):
                 int(self.R * self.scale)
             )
 
-        # draw rover
-        rover_rect = pygame.Rect(
-            int((self.x - self.W/2) * self.scale),
-            int((self.y - self.W/2) * self.scale),
-            int(self.W * self.scale),
-            int(self.W * self.scale)
+        # draw rover with heading
+        rover_size = int(self.W * self.scale)
+        rover_surface = pygame.Surface((rover_size, rover_size), pygame.SRCALPHA)
+        pygame.draw.rect(rover_surface, (0, 0, 255), rover_surface.get_rect())  # blue rover
+        heading_start = (rover_size // 2, rover_size // 2)
+        heading_end = (
+            int(rover_size // 2 + (rover_size // 2) * math.cos(self.theta)),
+            int(rover_size // 2 - (rover_size // 2) * math.sin(self.theta)),
         )
-        pygame.draw.rect(self.screen, (0, 0, 255), rover_rect)  # blue rover
+        pygame.draw.line(rover_surface, (255, 255, 255), heading_start, heading_end, 3)
+        rotated_rover = pygame.transform.rotate(rover_surface, -math.degrees(self.theta))
+        rover_rect = rotated_rover.get_rect(center=(int(self.x * self.scale), int(self.y * self.scale)))
+        self.screen.blit(rotated_rover, rover_rect)
 
         # draw boulder features
         boulder_x = int((self.x + self.d_unit[0] * self.d_edge) * self.scale)

@@ -1,7 +1,7 @@
 import time
 import sys
 from pathlib import Path
-import re
+import yaml
 
 import pygame
 import gymnasium as gym
@@ -21,34 +21,41 @@ def make_env(render_mode="human"):
         return env
     return _init
 
-def find_latest_checkpoint(checkpoint_dir="ppo_rover_checkpoints"):
-    """Find the latest checkpoint by step count"""
-    checkpoint_path = Path(checkpoint_dir)
-    
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint directory '{checkpoint_dir}' not found")
-    
-    # Find all model files and extract step counts
-    model_files = list(checkpoint_path.glob("ppo_rover_model_*_steps.zip"))
-    
-    if not model_files:
-        raise FileNotFoundError(f"No checkpoint files found in '{checkpoint_dir}'")
-    
-    # Extract step count from filename and find the latest
-    def get_step_count(file_path):
-        match = re.search(r'(\d+)_steps\.zip$', file_path.name)
-        return int(match.group(1)) if match else 0
-    
-    latest_model = max(model_files, key=get_step_count)
-    step_count = get_step_count(latest_model)
-    
-    # Corresponding vecnormalize file
-    vecnorm_file = checkpoint_path / f"ppo_rover_model_vecnormalize_{step_count}_steps.pkl"
-    
-    if not vecnorm_file.exists():
-        raise FileNotFoundError(f"VecNormalize file not found: {vecnorm_file}")
-    
-    return str(latest_model), str(vecnorm_file), step_count
+def load_config(config_path=None):
+    """Load configuration from YAML file."""
+    if config_path is None:
+        config_path = Path(__file__).resolve().parents[1] / "configs" / "ppo_rover_training.yaml"
+
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def resolve_artifact_paths(config_path=None):
+    """Resolve the final model and VecNormalize files written by training."""
+    config = load_config(config_path)
+
+    try:
+        output_cfg = config["output"]
+    except Exception as e:
+        raise RuntimeError(f"Invalid or incomplete config file: {e}") from e
+
+    model_path = Path(output_cfg.get("final_model_name", "ppo_rover_final"))
+    vecnorm_path = Path(output_cfg.get("vecnormalize_stats_name", "ppo_rover_vecnormalize"))
+
+    if model_path.suffix != ".zip":
+        model_path = model_path.with_suffix(".zip")
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    if not vecnorm_path.exists():
+        fallback_vecnorm_path = vecnorm_path.with_suffix(".pkl")
+        if fallback_vecnorm_path.exists():
+            vecnorm_path = fallback_vecnorm_path
+        else:
+            raise FileNotFoundError(f"VecNormalize file not found: {vecnorm_path}")
+
+    return str(model_path), str(vecnorm_path)
 
 def handle_pygame_events():
     """Handle pygame events to keep window responsive"""
@@ -57,11 +64,11 @@ def handle_pygame_events():
             return False
     return True
 
-def main(checkpoint_dir="ppo_rover_checkpoints"):
-    # Find the latest checkpoint
+def main(config_path=None):
+    # Load the latest saved training artifacts
     try:
-        model_path, vecnorm_path, step_count = find_latest_checkpoint(checkpoint_dir)
-        print(f"Loading checkpoint from {step_count} training steps...")
+        model_path, vecnorm_path = resolve_artifact_paths(config_path)
+        print("Loading the latest saved training artifacts...")
         print(f"Model: {model_path}")
         print(f"VecNormalize: {vecnorm_path}")
     except FileNotFoundError as e:
