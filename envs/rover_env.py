@@ -3,6 +3,7 @@ from gymnasium import spaces
 import numpy as np
 import math
 import pygame
+import scipy.integrate as integrate
 
 
 class RoverEnv(gym.Env):
@@ -117,6 +118,8 @@ class RoverEnv(gym.Env):
         # initial boulder features (relative to the rover's center)
         self.d_edge, self.d_unit = self._compute_boulder_features()
 
+        self.sim_time = 0.0
+
         obs = self._get_obs()
 
         if self.render_mode == "human":
@@ -142,17 +145,25 @@ class RoverEnv(gym.Env):
         v = self.wr * (omega_R + omega_L) / 2.0
         omega = self.wr * (omega_R - omega_L) / self.rW
 
-        # unicycle model for rover motion
-        self.x += v * math.cos(self.theta) * self.dt
-        self.y += v * math.sin(self.theta) * self.dt
-        self.theta += omega * self.dt
-        # normalize heading angle to [-pi, pi]
-        self.theta = (self.theta + np.pi) % (2 * np.pi) - np.pi
+        # integrate continuous-time dynamics over the time step duration
+        state0 = [self.x, self.y, self.theta]
+        sol = integrate.solve_ivp(
+            fun=lambda t, state: self._dynamics(t, state, v, omega),
+            t_span=[0, self.dt],
+            y0=state0,
+            method='RK45'
+        )
+
+        self.x, self.y, self.theta = sol.y[:, -1]
+        self.theta = (self.theta + np.pi) % (2 * np.pi) - np.pi  # wrap angle to [-pi, pi]
 
         # base reward is negative distance to the target
         reward = -0.01
         terminated = False
         truncated = False
+
+        # time update
+        self.sim_time += self.dt
 
         # target check
         if self._in_target_region():
@@ -160,8 +171,12 @@ class RoverEnv(gym.Env):
             terminated = True
 
         # collision check
-        if self._obstabcle_collision() or self._boundary_collision():
+        elif self._obstabcle_collision() or self._boundary_collision():
             reward = -200.0
+            terminated = True
+
+        elif self.sim_time >= self.max_time:
+            reward = -100.0
             terminated = True
 
         obs = self._get_obs()
@@ -261,6 +276,17 @@ class RoverEnv(gym.Env):
             d_unit = np.array([0.0, 0.0], dtype=np.float32)
 
         return float(d_edge), d_unit.astype(np.float32)
+
+
+    '''
+    Continious-time dynamics function for the rover given the current state and action
+    '''
+    def _dynamics(self, t, state, v, omega):
+        x, y, theta = state
+        dxdt = v * math.cos(theta)
+        dydt = v * math.sin(theta)
+        dthetadt = omega
+        return np.array([dxdt, dydt, dthetadt], dtype=np.float32)
 
 
     '''
