@@ -1,0 +1,78 @@
+"""
+Installation script for project dependencies.
+This script installs all required packages from requirements.txt
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+
+def install_requirements(requirements_file=None):
+    """Install all dependencies from requirements.txt"""
+    
+    if requirements_file is None:
+        # Default to requirements.txt in the project root
+        requirements_file = Path(__file__).resolve().parent / "requirements.txt"
+    
+    requirements_file = Path(requirements_file)
+    
+    if not requirements_file.exists():
+        print(f"Error: {requirements_file} not found!")
+        return False
+    
+    print(f"Installing dependencies from {requirements_file}...")
+    print("=" * 60)
+    
+    try:
+        # Run pip install
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)],
+            check=True,
+            text=True
+        )
+        print("=" * 60)
+        print("✓ All dependencies installed successfully!")
+        return True
+    except subprocess.CalledProcessError as e:
+        print("=" * 60)
+        print(f"✗ Error installing dependencies: {e}")
+        return False
+    except Exception as e:
+        print(f"✗ Unexpected error: {e}")
+        return False
+
+
+def upgrade_pip():
+    """Upgrade pip to the latest version"""
+    print("Upgrading pip...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
+            check=True,
+            text=True
+        )
+        print("✓ pip upgraded successfully!")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Could not upgrade pip: {e}")
+        return False
+
+
+if __name__ == "__main__":
+    print("Project Dependency Installer")
+    print("=" * 60)
+    
+    # Upgrade pip first
+    upgrade_pip()
+    print()
+    
+    # Install requirements
+    success = install_requirements()
+    
+    if success:
+        print("\nSetup complete! You can now run the training scripts.")
+        sys.exit(0)
+    else:
+        print("\nSetup failed. Please check the error messages above.")
+        sys.exit(1)
