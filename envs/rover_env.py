@@ -5,6 +5,8 @@ import math
 import pygame
 import scipy.integrate as integrate
 
+from envs import max_time, rW, wr
+
 
 class RoverEnv(gym.Env):
 
@@ -16,22 +18,22 @@ class RoverEnv(gym.Env):
         # map dimensions
         self.L = 25.0 # length of the map L x L
 
-        # target region dimensions
+        # parameters of the rover
+        self.W = 2.0 # width of the rover W x W
         self.T = self.W # width of the target region. W x W
-        
+        self.r_boundary = self.W / np.sqrt(2) # minimum distance from the center of the rover to the boundary of the map to avoid collision with the boulders
+
         # boulder's dimensions
         self.N = 6 # number of boulders
         self.R = 1.0 # radius of each boulder (for collision detection)
         self.boulders = None # list of boulders' positions [(x1, y1), (x2, y2), ..., (xN, yN)]
-
-        # parameters of the rover
-        self.W = 2.0 # width of the rover W x W
         self.d_safe = self.R + (np.sqrt(2)/2)*self.W # minimum safe distance from the center of a boulder to the center of the rover
-        self.r_boundary = self.W / np.sqrt(2) # minimum distance from the center of the rover to the boundary of the map to avoid collision with the boulders
 
         # motion parameters. motion limits for PPO
         self.v_max = 0.5 # forward velocity of the rover (m/step)
         self.omega_max = 2.0 # rotation per step (radians/step)
+        self.wr = wr
+        self.rW = rW
         
         # state of the rover
         self.x = None # x-coordinate of the rover's center
@@ -59,6 +61,7 @@ class RoverEnv(gym.Env):
         # initialization contraints
         self.min_target_dist = self.W/2.0 # minimum distance between the target region and any boulder
         self.min_boulder_dist = 1.5 * (2 * self.R + self.W) # minimum distance between any two boulders to avoid overlap
+        self.max_time = max_time
 
         # rendering parameters
         self.render_mode = render_mode
@@ -84,8 +87,8 @@ class RoverEnv(gym.Env):
         super().reset(seed=seed)
 
         # rover position and orientation
-        self.x = self._sample_point()
-        self.y = self._sample_point()
+        self.x = self.np_random.uniform(self.r_boundary, self.L - self.r_boundary)
+        self.y = self.np_random.uniform(self.r_boundary, self.L - self.r_boundary)
         self.theta = self.np_random.uniform(-np.pi, np.pi)
 
         # target position (ensure it's not too close to the boundary to allow the rover to fit)
