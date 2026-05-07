@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import yaml
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,6 +15,9 @@ def make_env(render_mode=None):
         return env
     return _init
 
+'''
+Loading the configuration from a YAML file allows us to easily tweak hyperparameters and training settings without modifying the code.
+'''
 def load_config(config_path=None):
     """Load configuration from YAML file."""
     if config_path is None:
@@ -23,6 +26,7 @@ def load_config(config_path=None):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
+
 
 def main(config_path=None):
     # Load configuration
@@ -61,8 +65,22 @@ def main(config_path=None):
     except Exception as e:
         raise ValueError(f"Invalid total_timesteps in config: {training_cfg.get('total_timesteps')}") from e
 
-    # vectorized environment
-    env = DummyVecEnv([make_env(render_mode=None)])
+    # for parallel environments, we need to ensure the total timesteps is divisible by the number of environments
+    # Get number of environments and execution mode
+    num_envs = training_cfg.get('num_envs', 1)
+    num_envs = max(1, min(8, int(num_envs)))  # clamp to 1-8
+    env_mode = training_cfg.get('env_mode', 'subproc').lower()
+
+    # Create multiple environments
+    env_fns = [make_env(render_mode=None) for _ in range(num_envs)]
+    
+    # Use SubprocVecEnv for parallel execution or DummyVecEnv for synchronous
+    if num_envs > 1 and env_mode == 'subproc':
+        print(f"Creating {num_envs} parallel environments (async mode)...")
+        env = SubprocVecEnv(env_fns)
+    else:
+        print(f"Creating {num_envs} environment(s) (sync mode)...")
+        env = DummyVecEnv(env_fns)
 
     # normalized observations and rewards
     env = VecNormalize(

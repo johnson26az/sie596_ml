@@ -148,6 +148,9 @@ class RoverEnv(gym.Env):
         v = self.wr * (omega_R + omega_L) / 2.0
         omega = self.wr * (omega_R - omega_L) / self.rW
 
+        # save old position for reward shaping
+        self.old_x, self.old_y = self.x, self.y
+
         # integrate continuous-time dynamics over the time step duration
         state0 = [self.x, self.y, self.theta]
         sol = integrate.solve_ivp(
@@ -165,9 +168,30 @@ class RoverEnv(gym.Env):
         terminated = False
         truncated = False
 
-        # time update
+        # update simulation time
         self.sim_time += self.dt
 
+        # reward shaping: reward for getting closer to the target region compared to the previous step
+        # computing the reward
+        reward = 0.0
+
+        # distance to goal shaping
+        old_dist = np.linalg.norm([self.old_x - self.goal[0], self.old_y - self.goal[1]])
+        new_dist = np.linalg.norm([self.x - self.goal[0], self.y - self.goal[1]])
+        reward += 1.0 * (old_dist - new_dist)  # reward for getting closer to the target
+
+        # boulder proximity penalty (encourage the rover to stay away from boulders)
+        self.d_edge, _ = self._compute_boulder_features()
+        if self.d_edge < 2.0:  # if the rover is within 2 meters of a boulder edge
+            reward -= (2.0 - self.d_edge) * 2.0  # penalty increases as the rover gets closer to the boulder
+
+        # wheel effort penalty (encourage energy-efficient solutions)
+        reward -= 0.01 * (u_R**2 + u_L**2)
+
+        # time penalty (encourage faster solutions)
+        reward -= 0.01
+
+        # termination conditions
         # target check
         if self._in_target_region():
             reward = 200.0

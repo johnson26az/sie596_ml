@@ -5,19 +5,25 @@ training:
   total_timesteps: 3000000
   verbose: 1
   progress_bar: true
+<<<<<<< Updated upstream
   device: "cuda"
+=======
+  device: "auto"
+  num_envs: 8                    # number of parallel environments (1-8)
+  env_mode: "subproc"           # "subproc" for asynchronous (parallel), "sync" for synchronous
+>>>>>>> Stashed changes
 
 # PPO model hyperparameters
 ppo_model:
   policy: "MlpPolicy"
-  learning_rate: "lambda progress: 1e-4 * progress"  # linear learning rate decay
-  n_steps: 4096
-  batch_size: 256
-  n_epochs: 20
+  learning_rate: 3e-4
+  n_steps: 2048
+  batch_size: 512
+  n_epochs: 10
   gamma: 0.995                   # discount factor
   gae_lambda: 0.95               # GAE lambda parameter
   clip_range: 0.2                # clipping range for policy gradient
-  ent_coef: 0.1                  # entropy coefficient
+  ent_coef: 0.005                  # entropy coefficient
   vf_coef: 0.5                   # value function coefficient
   max_grad_norm: 0.5             # max gradient norm for clipping
 
