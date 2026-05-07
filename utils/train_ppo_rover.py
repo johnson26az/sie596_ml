@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -14,7 +15,18 @@ def make_env(render_mode=None):
         return env
     return _init
 
-def main():
+def load_config(config_path=None):
+    """Load configuration from YAML file."""
+    if config_path is None:
+        config_path = Path(__file__).resolve().parents[1] / "configs" / "ppo_rover_training.yaml"
+    
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+def main(config_path=None):
+    # Load configuration
+    config = load_config(config_path)
     
     # vectorized environment
     env = DummyVecEnv([make_env(render_mode=None)])
@@ -22,50 +34,49 @@ def main():
     # normalized observations and rewards
     env = VecNormalize(
         env,
-        norm_obs=True,
-        norm_reward=True,
-        clip_obs=10.0,
-        clip_reward=10.0
+        norm_obs=config['vec_normalize']['norm_obs'],
+        norm_reward=config['vec_normalize']['norm_reward'],
+        clip_obs=config['vec_normalize']['clip_obs'],
+        clip_reward=config['vec_normalize']['clip_reward']
     )
 
     # instantiate the agent
     model = PPO(
-        "MlpPolicy",
+        config['ppo_model']['policy'],
         env,
-        verbose=1,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.0,
-        vf_coef=0.5,
-        max_grad_norm=0.5,
-        device="auto",
+        verbose=config['training']['verbose'],
+        learning_rate=config['ppo_model']['learning_rate'],
+        n_steps=config['ppo_model']['n_steps'],
+        batch_size=config['ppo_model']['batch_size'],
+        n_epochs=config['ppo_model']['n_epochs'],
+        gamma=config['ppo_model']['gamma'],
+        gae_lambda=config['ppo_model']['gae_lambda'],
+        clip_range=config['ppo_model']['clip_range'],
+        ent_coef=config['ppo_model']['ent_coef'],
+        vf_coef=config['ppo_model']['vf_coef'],
+        max_grad_norm=config['ppo_model']['max_grad_norm'],
+        device=config['training']['device'],
     )
 
     # checkpoint callback
     checkpoint_callback = CheckpointCallback(
-        save_freq=50000,
-        save_path="./ppo_rover_checkpoints/",
-        name_prefix="ppo_rover_model",
-        save_replay_buffer=False,
-        save_vecnormalize=True,
+        save_freq=config['checkpoint']['save_freq'],
+        save_path=config['checkpoint']['save_path'],
+        name_prefix=config['checkpoint']['name_prefix'],
+        save_replay_buffer=config['checkpoint']['save_replay_buffer'],
+        save_vecnormalize=config['checkpoint']['save_vecnormalize'],
     )
 
     # train the agent
-    total_timesteps = 1_000_000
     model.learn(
-        total_timesteps=total_timesteps,
+        total_timesteps=config['training']['total_timesteps'],
         callback=checkpoint_callback,
-        progress_bar=True,
+        progress_bar=config['training']['progress_bar'],
     )
 
     # save the final model and vecnormalize stats
-    model.save("ppo_rover_final")
-    env.save("ppo_rover_vecnormalize")
+    model.save(config['output']['final_model_name'])
+    env.save(config['output']['vecnormalize_stats_name'])
 
     env.close()
 
