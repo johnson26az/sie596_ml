@@ -5,6 +5,8 @@ This script installs all required packages from requirements.txt
 
 import subprocess
 import sys
+import os
+import shutil
 from pathlib import Path
 
 
@@ -43,6 +45,46 @@ def install_requirements(requirements_file=None):
         return False
 
 
+def find_python_3_11() -> str | None:
+    """Try to locate a Python 3.11 interpreter on the system.
+
+    Returns the interpreter executable path or None if not found.
+    """
+    # Prefer the Windows py launcher if available
+    try:
+        if shutil.which("py"):
+            out = subprocess.run(["py", "-3.11", "-c", "import sys; print(sys.executable)"],
+                                 capture_output=True, text=True)
+            if out.returncode == 0:
+                path = out.stdout.strip()
+                if path:
+                    return path
+    except Exception:
+        pass
+
+    # Try common binary names
+    for name in ("python3.11", "python3.11.exe"):
+        p = shutil.which(name)
+        if p:
+            return p
+
+    return None
+
+
+def recreate_venv_with_python(python_exe: str, venv_path: Path) -> bool:
+    """Recreate the venv at venv_path using python_exe. Returns True on success."""
+    try:
+        if venv_path.exists():
+            print(f"Removing existing venv at {venv_path}")
+            shutil.rmtree(venv_path)
+        print(f"Creating venv with {python_exe} -> {venv_path}")
+        subprocess.run([python_exe, "-m", "venv", str(venv_path)], check=True)
+        return True
+    except Exception as e:
+        print(f"Could not recreate venv: {e}")
+        return False
+
+
 def upgrade_pip():
     """Upgrade pip to the latest version"""
     print("Upgrading pip...")
@@ -62,7 +104,29 @@ def upgrade_pip():
 if __name__ == "__main__":
     print("Project Dependency Installer")
     print("=" * 60)
-    
+    # If we're not running on Python 3.11, attempt to locate one and recreate the venv
+    desired_major = 3
+    desired_minor = 11
+    here = Path(__file__).resolve().parent
+    venv_dir = here / "venv"
+
+    if sys.version_info[:2] != (desired_major, desired_minor):
+        py311 = find_python_3_11()
+        if py311:
+            # If we're currently not using the project's venv or it's the wrong Python, recreate and re-exec
+            venv_python = venv_dir / "Scripts" / "python.exe"
+            recreated = False
+            if not venv_dir.exists() or not venv_python.exists():
+                recreated = recreate_venv_with_python(py311, venv_dir)
+            # If recreated or venv exists but not running under it, re-exec using the venv python
+            if recreated or venv_python.exists():
+                target = str(venv_python)
+                if os.path.abspath(sys.executable) != os.path.abspath(target):
+                    print(f"Re-running installer under {target}")
+                    os.execv(target, [target, str(Path(__file__).resolve())])
+        else:
+            print("Warning: This project is tested on Python 3.11. Consider installing Python 3.11 to avoid build issues.")
+
     # Upgrade pip first
     upgrade_pip()
     print()

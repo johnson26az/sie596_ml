@@ -5,7 +5,7 @@ training:
   total_timesteps: 3000000
   verbose: 1
   progress_bar: true
-  device: "auto"
+  device: "cuda"
 
 # PPO model hyperparameters
 ppo_model:
