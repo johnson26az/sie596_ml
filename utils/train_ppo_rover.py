@@ -27,52 +27,88 @@ def load_config(config_path=None):
 def main(config_path=None):
     # Load configuration
     config = load_config(config_path)
-    
+
+    # Basic validation of expected sections
+    try:
+        ppo_cfg = config['ppo_model']
+        training_cfg = config['training']
+        vec_cfg = config['vec_normalize']
+        checkpoint_cfg = config['checkpoint']
+        output_cfg = config['output']
+    except Exception as e:
+        raise RuntimeError(f"Invalid or incomplete config file: {e}") from e
+
+    # Parse learning rate: allow numeric or a string lambda (e.g. "lambda progress: 1e-4 * progress")
+    lr_cfg = ppo_cfg.get('learning_rate')
+    if isinstance(lr_cfg, str):
+        try:
+            # safe-ish eval: disable builtins
+            learning_rate = eval(lr_cfg, {"__builtins__": {}}, {})
+        except Exception:
+            try:
+                learning_rate = float(lr_cfg)
+            except Exception as e:
+                raise ValueError(f"Could not parse learning_rate from config: {lr_cfg}") from e
+    else:
+        learning_rate = lr_cfg
+
+    if not (callable(learning_rate) or isinstance(learning_rate, (float, int))):
+        raise ValueError("`learning_rate` must be a float/int or a string lambda expression in the config")
+
+    # Ensure total_timesteps is an int
+    try:
+        total_timesteps = int(training_cfg.get('total_timesteps'))
+    except Exception as e:
+        raise ValueError(f"Invalid total_timesteps in config: {training_cfg.get('total_timesteps')}") from e
+
     # vectorized environment
     env = DummyVecEnv([make_env(render_mode=None)])
 
     # normalized observations and rewards
     env = VecNormalize(
         env,
-        norm_obs=config['vec_normalize']['norm_obs'],
-        norm_reward=config['vec_normalize']['norm_reward'],
-        clip_obs=config['vec_normalize']['clip_obs'],
-        clip_reward=config['vec_normalize']['clip_reward']
+        norm_obs=vec_cfg.get('norm_obs', True),
+        norm_reward=vec_cfg.get('norm_reward', True),
+        clip_obs=vec_cfg.get('clip_obs', 10.0),
+        clip_reward=vec_cfg.get('clip_reward', 10.0)
     )
 
     # instantiate the agent
     model = PPO(
-        config['ppo_model']['policy'],
+        ppo_cfg.get('policy', 'MlpPolicy'),
         env,
-        verbose=config['training']['verbose'],
-        learning_rate=config['ppo_model']['learning_rate'],
-        n_steps=config['ppo_model']['n_steps'],
-        batch_size=config['ppo_model']['batch_size'],
-        n_epochs=config['ppo_model']['n_epochs'],
-        gamma=config['ppo_model']['gamma'],
-        gae_lambda=config['ppo_model']['gae_lambda'],
-        clip_range=config['ppo_model']['clip_range'],
-        ent_coef=config['ppo_model']['ent_coef'],
-        vf_coef=config['ppo_model']['vf_coef'],
-        max_grad_norm=config['ppo_model']['max_grad_norm'],
-        device=config['training']['device'],
+        verbose=training_cfg.get('verbose', 1),
+        learning_rate=learning_rate,
+        n_steps=ppo_cfg.get('n_steps', 2048),
+        batch_size=ppo_cfg.get('batch_size', 64),
+        n_epochs=ppo_cfg.get('n_epochs', 10),
+        gamma=ppo_cfg.get('gamma', 0.99),
+        gae_lambda=ppo_cfg.get('gae_lambda', 0.95),
+        clip_range=ppo_cfg.get('clip_range', 0.2),
+        ent_coef=ppo_cfg.get('ent_coef', 0.0),
+        vf_coef=ppo_cfg.get('vf_coef', 0.5),
+        max_grad_norm=ppo_cfg.get('max_grad_norm', 0.5),
+        device=training_cfg.get('device', 'auto'),
     )
 
     # checkpoint callback
     checkpoint_callback = CheckpointCallback(
-        save_freq=config['checkpoint']['save_freq'],
-        save_path=config['checkpoint']['save_path'],
-        name_prefix=config['checkpoint']['name_prefix'],
-        save_replay_buffer=config['checkpoint']['save_replay_buffer'],
-        save_vecnormalize=config['checkpoint']['save_vecnormalize'],
+        save_freq=checkpoint_cfg.get('save_freq', 50000),
+        save_path=checkpoint_cfg.get('save_path', './ppo_rover_checkpoints/'),
+        name_prefix=checkpoint_cfg.get('name_prefix', 'ppo_rover_model'),
+        save_replay_buffer=checkpoint_cfg.get('save_replay_buffer', False),
+        save_vecnormalize=checkpoint_cfg.get('save_vecnormalize', True),
     )
 
     # train the agent
-    model.learn(
-        total_timesteps=config['training']['total_timesteps'],
-        callback=checkpoint_callback,
-        progress_bar=config['training']['progress_bar'],
-    )
+    try:
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=checkpoint_callback,
+            progress_bar=training_cfg.get('progress_bar', True),
+        )
+    except Exception as e:
+        raise RuntimeError(f"Training failed: {e}") from e
 
     # save the final model and vecnormalize stats
     model.save(config['output']['final_model_name'])
