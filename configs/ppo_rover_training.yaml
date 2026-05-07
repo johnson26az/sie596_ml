@@ -5,13 +5,9 @@ training:
   total_timesteps: 3000000
   verbose: 1
   progress_bar: true
-<<<<<<< Updated upstream
-  device: "cuda"
-=======
   device: "auto"
   num_envs: 8                    # number of parallel environments (1-8)
   env_mode: "subproc"           # "subproc" for asynchronous (parallel), "sync" for synchronous
->>>>>>> Stashed changes
 
 # PPO model hyperparameters
 ppo_model:
