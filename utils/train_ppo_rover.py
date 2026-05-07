@@ -9,9 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from envs.rover_env import RoverEnv
 
-def make_env(render_mode=None):
+def make_env(render_mode=None, env_params=None):
     def _init():
-        env = RoverEnv(render_mode=render_mode)
+        if env_params is None:
+            env = RoverEnv(render_mode=render_mode)
+        else:
+            env = RoverEnv(render_mode=render_mode, **env_params)
         return env
     return _init
 
@@ -71,8 +74,22 @@ def main(config_path=None):
     num_envs = max(1, min(8, int(num_envs)))  # clamp to 1-8
     env_mode = training_cfg.get('env_mode', 'subproc').lower()
 
+    # Extract environment parameters from config
+    env_cfg = config.get('environment', {})
+    env_params = {
+        'l': env_cfg.get('l', 25.0),
+        'W': env_cfg.get('W', 2.0),
+        'N': env_cfg.get('N', 6),
+        'R': env_cfg.get('R', 1.0),
+        'r': env_cfg.get('r', 0.25),
+        'rW': env_cfg.get('rW', 2.0),
+        'omega_max': env_cfg.get('omega_max', 2.0),
+        'delta_t': env_cfg.get('delta_t', 0.1),
+        'max_time_steps': env_cfg.get('max_time', 200.0),
+    }
+
     # Create multiple environments
-    env_fns = [make_env(render_mode=None) for _ in range(num_envs)]
+    env_fns = [make_env(render_mode=None, env_params=env_params) for _ in range(num_envs)]
     
     # Use SubprocVecEnv for parallel execution or DummyVecEnv for synchronous
     if num_envs > 1 and env_mode == 'subproc':

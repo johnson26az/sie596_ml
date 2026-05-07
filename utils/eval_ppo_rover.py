@@ -15,9 +15,12 @@ from envs.rover_env import RoverEnv
 '''
 making this a separate file to avoid reloading the environment and model during training
 '''
-def make_env(render_mode="human"):
+def make_env(render_mode="human", env_params=None):
     def _init():
-        env = RoverEnv(render_mode=render_mode)
+        if env_params is None:
+            env = RoverEnv(render_mode=render_mode)
+        else:
+            env = RoverEnv(render_mode=render_mode, **env_params)
         return env
     return _init
 
@@ -67,6 +70,7 @@ def handle_pygame_events():
 def main(config_path=None):
     # Load the latest saved training artifacts
     try:
+        config = load_config(config_path)
         model_path, vecnorm_path = resolve_artifact_paths(config_path)
         print("Loading the latest saved training artifacts...")
         print(f"Model: {model_path}")
@@ -75,8 +79,22 @@ def main(config_path=None):
         print(f"Error: {e}")
         return
     
+    # Extract environment parameters from config
+    env_cfg = config.get('environment', {})
+    env_params = {
+        'l': env_cfg.get('l', 25.0),
+        'W': env_cfg.get('W', 2.0),
+        'N': env_cfg.get('N', 6),
+        'R': env_cfg.get('R', 1.0),
+        'r': env_cfg.get('r', 0.25),
+        'rW': env_cfg.get('rW', 2.0),
+        'omega_max': env_cfg.get('omega_max', 2.0),
+        'delta_t': env_cfg.get('delta_t', 0.1),
+        'max_time_steps': env_cfg.get('max_time', 200.0),
+    }
+    
     # vectorized environment
-    env = DummyVecEnv([make_env(render_mode="human")])
+    env = DummyVecEnv([make_env(render_mode="human", env_params=env_params)])
 
     # normalized observations and rewards
     env = VecNormalize.load(vecnorm_path, env)

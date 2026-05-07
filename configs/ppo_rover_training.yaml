@@ -1,5 +1,17 @@
 # Configuration for PPO training on Rover Navigation Environment
 
+# Environment parameters
+environment:
+  l: 25.0                        # map dimensions (l x l meters)
+  W: 2.0                         # width of rover and target (meters)
+  N: 6                           # number of boulders
+  R: 1.0                         # radius of each boulder (meters)
+  r: 0.25                        # wheel radius (meters)
+  rW: 2.0                        # rover width (distance between wheels, meters)
+  omega_max: 2.0                 # maximum angular velocity (radians/step)
+  delta_t: 0.1                   # time step duration (seconds)
+  max_time: 200.0                # maximum episode duration (seconds)
+
 # Training parameters
 training:
   total_timesteps: 3000000
@@ -12,16 +24,16 @@ training:
 # PPO model hyperparameters
 ppo_model:
   policy: "MlpPolicy"
-  learning_rate: 3e-4
-  n_steps: 2048
-  batch_size: 512
-  n_epochs: 10
+  learning_rate: 2e-4
+  n_steps: 768                   # number of steps to run for each environment per update
+  batch_size: 384
+  n_epochs: 15
   gamma: 0.995                   # discount factor
-  gae_lambda: 0.95               # GAE lambda parameter
-  clip_range: 0.2                # clipping range for policy gradient
-  ent_coef: 0.005                  # entropy coefficient
-  vf_coef: 0.5                   # value function coefficient
-  max_grad_norm: 0.5             # max gradient norm for clipping
+  gae_lambda: 0.92               # GAE lambda parameter
+  clip_range: 0.15                # clipping range for policy gradient
+  ent_coef: 0.001                  # entropy coefficient
+  vf_coef: 0.6                   # value function coefficient
+  max_grad_norm: 0.4             # max gradient norm for clipping
 
 # VecNormalize parameters (for observation and reward normalization)
 vec_normalize:
