@@ -50,6 +50,8 @@ class RoverEnv(gym.Env):
         self.y = None # y-coordinate of the rover's center
         self.theta = None # orientation of the rover (radians)
         self.goal = None # target region center (x_T, y_T)
+        self.prev_v = 0.0 # previous forward velocity for reward shaping
+        self.prev_theta = 0.0 # previous heading for reward shaping
 
         # action space [v, omega]: forward velocity and rotation
         self.action_space = spaces.Box(
@@ -132,6 +134,8 @@ class RoverEnv(gym.Env):
         self.d_edge, self.d_unit = self._compute_boulder_features()
 
         self.sim_time = 0.0
+        self.prev_v = 0.0
+        self.prev_theta = self.theta
 
         obs = self._get_obs()
 
@@ -217,12 +221,20 @@ class RoverEnv(gym.Env):
 
         # penalize when facing away from the target and reward when facing towards the target
         if alignment < 0:
-            reward += 0.3 * alignment  # small penalty for facing away from the target
+            reward -= 0.1  # small penalty for facing away from the target
 
         # penalize when reversing direction (encourage the rover to maintain a consistent heading towards the target)
         if np.sign(v) != np.sign(self.prev_v):
-            reward -= 0.4  # penalty for reversing direction
+            reward -= 0.2  # penalty for reversing direction
         self.prev_v = v
+
+        # penalized for large angular velocity (encourage smoother trajectories)
+        reward -= 0.05 * abs(omega)
+
+        # penalized for rapid heading changes (encourage smoother trajectories)
+        heading_change = abs(self.theta - getattr(self, "prev_theta", self.theta))
+        reward -= 0.01 * heading_change
+        self.prev_theta = self.theta
 
         # bonus for consistent forward movement (encourage the rover to maintain a consistent heading towards the target)\
         if v > 0:

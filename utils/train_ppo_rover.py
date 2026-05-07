@@ -1,4 +1,5 @@
 import sys
+import traceback
 from pathlib import Path
 import yaml
 from stable_baselines3 import PPO
@@ -143,7 +144,9 @@ def main(config_path=None):
             progress_bar=training_cfg.get('progress_bar', True),
         )
     except Exception as e:
-        raise RuntimeError(f"Training failed: {e}") from e
+        print("Training failed with exception type:", type(e).__name__)
+        traceback.print_exc()
+        raise RuntimeError(f"Training failed: {type(e).__name__}: {e}") from e
 
     # save the final model and vecnormalize stats
     model.save(config['output']['final_model_name'])

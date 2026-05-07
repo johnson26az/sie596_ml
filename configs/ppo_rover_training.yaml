@@ -14,7 +14,7 @@ environment:
 
 # Training parameters
 training:
-  total_timesteps: 3000000
+  total_timesteps: 5000000
   verbose: 1
   progress_bar: true
   device: "auto"
