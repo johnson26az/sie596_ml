@@ -53,7 +53,7 @@ class RoverEnv(gym.Env):
         self.prev_v = 0.0 # previous forward velocity for reward shaping
         self.prev_theta = 0.0 # previous heading for reward shaping
 
-        # action space [v, omega]: forward velocity and rotation
+        # action space [u_R, u_L]: normalized wheel angular commands (right, left) in [-1,1]
         self.action_space = spaces.Box(
             low=np.array([-1.0, -1.0], dtype=np.float32),
             high=np.array([1.0, 1.0], dtype=np.float32),
@@ -149,7 +149,7 @@ class RoverEnv(gym.Env):
     Step with continuous action input [v, omega]: forward velocity and rotation
     '''
     def step(self, action):
-        # neural network output to normalized wheel commands
+        # neural network output: normalized wheel commands (right, left)
         u_R = float(np.clip(action[0], -1.0, 1.0))
         u_L = float(np.clip(action[1], -1.0, 1.0))
 
@@ -158,7 +158,7 @@ class RoverEnv(gym.Env):
         omega_L = self.omega_max * u_L
 
         # convert wheel angular velocities to rover's linear and angular velocity
-        # self.wr = 0.25 wheel radius, self.rW = 2.0 rover width
+        # self.wr = wheel radius, self.rW = rover width
         v = self.wr * (omega_R + omega_L) / 2.0
         omega = self.wr * (omega_R - omega_L) / self.rW
 
@@ -200,7 +200,7 @@ class RoverEnv(gym.Env):
         if self.d_edge < 2.0:  # if the rover is within 2 meters of a boulder edge
             reward -= (2.0 - self.d_edge) * 2.0  # penalty increases as the rover gets closer to the boulder
 
-        # wheel effort penalty (encourage energy-efficient solutions)
+        # control effort penalty (encourage energy-efficient solutions)
         reward -= 0.001 * (u_R**2 + u_L**2)
 
         # time penalty (encourage faster solutions)
@@ -409,15 +409,15 @@ class RoverEnv(gym.Env):
 
         center = (rover_size // 2, rover_size // 2)
         nose_length = rover_size // 2
-        nose_end = (rover_size // 2, max(0, rover_size // 2 - nose_length))
+        nose_end = (min(rover_size - 1, rover_size // 2 + nose_length), rover_size // 2)
         pygame.draw.line(rover_surface, (255, 255, 255), center, nose_end, 4)
         pygame.draw.polygon(
             rover_surface,
             (255, 215, 0),
             [
-                (rover_size // 2, max(0, rover_size // 2 - nose_length)),
-                (rover_size // 2 - 6, max(0, rover_size // 2 - nose_length + 12)),
-                (rover_size // 2 + 6, max(0, rover_size // 2 - nose_length + 12)),
+                (min(rover_size - 1, rover_size // 2 + nose_length), rover_size // 2),
+                (max(0, rover_size // 2 + nose_length - 12), rover_size // 2 - 6),
+                (max(0, rover_size // 2 + nose_length - 12), rover_size // 2 + 6),
             ],
         )
 
