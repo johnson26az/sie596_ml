@@ -6,7 +6,6 @@ import pygame
 import scipy.integrate as integrate
 
 from envs import max_time
-from envs.a_star_planner import astar
 
 
 class RoverEnv(gym.Env):
@@ -53,6 +52,8 @@ class RoverEnv(gym.Env):
         self.goal = None # target region center (x_T, y_T)
         self.prev_v = 0.0 # previous forward velocity for reward shaping
         self.prev_theta = 0.0 # previous heading for reward shaping
+        self.prev_u_R = 0.0 # previous right wheel command for action smoothness
+        self.prev_u_L = 0.0 # previous left wheel command for action smoothness
 
         # action space [u_R, u_L]: normalized wheel angular commands (right, left) in [-1,1]
         self.action_space = spaces.Box(
@@ -81,12 +82,6 @@ class RoverEnv(gym.Env):
         self.screen = None
         self.clock = None
         self.scale = 30  # scale for rendering (pixels per meter)
-        # grid/world bounds for path planning
-        self.x_min = 0.0
-        self.x_max = self.L
-        self.y_min = 0.0
-        self.y_max = self.L
-        self.grid_resolution = 0.5
 
     '''
     Helper functions
@@ -103,7 +98,6 @@ class RoverEnv(gym.Env):
     Return the initial observation
     '''
     def reset(self, seed=None, options=None):
-        # seed RNG first
         super().reset(seed=seed)
 
         # rover position and orientation
@@ -135,53 +129,8 @@ class RoverEnv(gym.Env):
                 if any(self._dist(boulder_pos, existing) < self.min_boulder_dist for existing in self.boulders):
                     continue
 
-                # store boulder as (x,y, radius)
-                self.boulders.append((boulder_pos[0], boulder_pos[1], self.R))
+                self.boulders.append(boulder_pos)
                 break
-
-
-        '''
-        Path planning with A*: we will create a grid representation of the environment, marking the boulders as obstacles, and then run A* to find a path from the rover's initial position to the target region. The resulting path will be stored as a list of waypoints that the rover can follow during the episode.
-        '''
-        x_min, x_max = self.x_min, self.x_max
-        y_min, y_max = self.y_min, self.y_max
-
-        nx = max(1, int((x_max - x_min) / self.grid_resolution))
-        ny = max(1, int((y_max - y_min) / self.grid_resolution))
-        grid = np.zeros((ny, nx), dtype=np.int32)
-
-        # mark boulders on the grid
-        for (bx, by, br) in self.boulders:
-            for iy in range(ny):
-                for ix in range(nx):
-                    wx = x_min + (ix + 0.5) * self.grid_resolution
-                    wy = y_min + (iy + 0.5) * self.grid_resolution
-                    if np.hypot(wx - bx, wy - by) <= br + 0.3:
-                        grid[iy, ix] = 1  # mark as obstacle
-        self.grid = grid
-
-        # compute start and goal indices for A*
-        def world_to_grid(x, y):
-            ix = int((x - x_min) / self.grid_resolution)
-            iy = int((y - y_min) / self.grid_resolution)
-            ix = np.clip(ix, 0, nx - 1)
-            iy = np.clip(iy, 0, ny - 1)
-            return ix, iy
-
-        start_idx = world_to_grid(self.x, self.y)
-        goal_idx = world_to_grid(self.goal[0], self.goal[1])
-
-        # run A* to find a path from start to goal (astar expects (ix,iy) pairs)
-        path_idx = astar(self.grid, start_idx, goal_idx)
-
-        # convert path to world waypoints
-        self.path = []
-        for ix, iy in path_idx:
-            wx = x_min + (ix + 0.5) * self.grid_resolution
-            wy = y_min + (iy + 0.5) * self.grid_resolution
-            self.path.append((wx, wy))
-
-        self.current_waypoint_idx = 0
 
         # initial boulder features (relative to the rover's center)
         self.d_edge, self.d_unit = self._compute_boulder_features()
@@ -189,8 +138,8 @@ class RoverEnv(gym.Env):
         self.sim_time = 0.0
         self.prev_v = 0.0
         self.prev_theta = self.theta
-        # initialize previous position used in reward shaping
-        self.old_x, self.old_y = self.x, self.y
+        self.prev_u_R = 0.0
+        self.prev_u_L = 0.0
 
         obs = self._get_obs()
 
@@ -204,42 +153,6 @@ class RoverEnv(gym.Env):
     Step with continuous action input [v, omega]: forward velocity and rotation
     '''
     def step(self, action):
-
-        '''
-        waypoint guidance reward shaping: provide a reward based on the rover's progress towards the next waypoint in the A* path. This encourages the agent to follow the path while still allowing for some flexibility in navigation.
-        '''
-        # initialize reward accumulator early (avoids UnboundLocalError)
-        reward = 0.0
-
-        # ensure path has at least the goal as a waypoint
-        if not getattr(self, 'path', None):
-            self.path = [(self.goal[0], self.goal[1])]
-
-        # safe previous position defaults
-        old_x = getattr(self, 'old_x', self.x)
-        old_y = getattr(self, 'old_y', self.y)
-
-        wp_x, wp_y = self.path[self.current_waypoint_idx]
-
-        old_wp_dist = np.linalg.norm([old_x - wp_x, old_y - wp_y])
-        new_wp_dist = np.linalg.norm([self.x - wp_x, self.y - wp_y])
-
-        # reward for getting closer to the next waypoint
-        reward += 2.0 * (old_wp_dist - new_wp_dist)
-
-        # advance waypoint if the rover is close enough to the current waypoint
-        if new_wp_dist < 0.5 and self.current_waypoint_idx < len(self.path) - 1:
-            self.current_waypoint_idx += 1
-            wp_x, wp_y = self.path[self.current_waypoint_idx]
-
-        # heading alignment reward: provide a reward based on how well the rover's heading aligns with the direction to the next waypoint. This encourages the agent to orient itself towards the path.
-        wp_heading = np.arctan2(wp_y - self.y, wp_x - self.x)
-        heading_error = abs(self.theta - wp_heading)
-        reward += 0.1 * heading_error  # small reward for aligning with the waypoint direction
-
-
-
-
         # neural network output: normalized wheel commands (right, left)
         u_R = float(np.clip(action[0], -1.0, 1.0))
         u_L = float(np.clip(action[1], -1.0, 1.0))
@@ -252,6 +165,10 @@ class RoverEnv(gym.Env):
         # self.wr = wheel radius, self.rW = rover width
         v = self.wr * (omega_R + omega_L) / 2.0
         omega = self.wr * (omega_R - omega_L) / self.rW
+
+        # store current velocities for rendering
+        self.v = v
+        self.omega = omega
 
         # save old position for reward shaping
         self.old_x, self.old_y = self.x, self.y
@@ -277,7 +194,9 @@ class RoverEnv(gym.Env):
 
 
 
-        # reward shaping: additional shaping terms accumulate into `reward`
+        # reward shaping: reward for getting closer to the target region compared to the previous step
+        # computing the reward
+        reward = 0.0
 
         # distance to goal shaping
         old_dist = np.linalg.norm([self.old_x - self.goal[0], self.old_y - self.goal[1]])
@@ -314,20 +233,26 @@ class RoverEnv(gym.Env):
 
         # penalize when reversing direction (encourage the rover to maintain a consistent heading towards the target)
         if np.sign(v) != np.sign(self.prev_v):
-            reward -= 0.2  # penalty for reversing direction
+            reward -= 0.75  # increased penalty for reversing direction
         self.prev_v = v
 
-        # penalized for large angular velocity (encourage smoother trajectories)
-        reward -= 0.05 * abs(omega)
+        # penalized for large angular velocity (encourage smoother trajectories) - INCREASED
+        reward -= 0.15 * abs(omega)
 
         # penalized for rapid heading changes (encourage smoother trajectories)
         heading_change = abs(self.theta - getattr(self, "prev_theta", self.theta))
-        reward -= 0.01 * heading_change
+        reward -= 0.05 * heading_change
         self.prev_theta = self.theta
 
+        # penalize action smoothness (rapid changes in steering commands)
+        action_smoothness = abs(u_R - self.prev_u_R) + abs(u_L - self.prev_u_L)
+        reward -= 0.15 * action_smoothness
+        self.prev_u_R = u_R
+        self.prev_u_L = u_L
+
         # bonus for consistent forward movement (encourage the rover to maintain a consistent heading towards the target)\
-        if v > 0:
-            reward += 0.05 * alignment  # small bonus for facing towards the target when moving forward
+        if v > 0 and alignment > 0.3:
+            reward += 0.08 * alignment  # bonus for facing and moving towards target (only if well-aligned)
 
 
 
@@ -399,16 +324,9 @@ class RoverEnv(gym.Env):
     Functions for collision detection
     '''
     def _obstabcle_collision(self):
-        for b in self.boulders:
-            try:
-                bx, by = b[0], b[1]
-                br = b[2] if len(b) > 2 else self.R
-            except Exception:
-                bx, by = b
-                br = self.R
+        for bx, by in self.boulders:
             dist = np.hypot(self.x - bx, self.y - by)
-            # safe distance depends on boulder radius
-            if dist < (br + (np.sqrt(2) / 2) * self.W):
+            if dist < self.d_safe:
                 return True
         return False
     
@@ -432,24 +350,16 @@ class RoverEnv(gym.Env):
         nearest_dist = float('inf')
         nearest_vec = np.array([0.0, 0.0], dtype=np.float32)
 
-        nearest_br = self.R
-        for b in self.boulders:
-            try:
-                bx, by = b[0], b[1]
-                br = b[2] if len(b) > 2 else self.R
-            except Exception:
-                bx, by = b
-                br = self.R
+        for bx, by in self.boulders:
             vec = np.array([bx - self.x, by - self.y], dtype=np.float32)
             dist_center = np.linalg.norm(vec)
 
             if dist_center < nearest_dist:
                 nearest_dist = dist_center
                 nearest_vec = vec
-                nearest_br = br
 
-        # distance to boulder edge (use the nearest boulder's radius)
-        d_edge = nearest_dist - nearest_br
+        # distance to boulder edge
+        d_edge = nearest_dist - self.R
 
         # unit vector to boulder
         if nearest_dist > 0:
@@ -486,55 +396,58 @@ class RoverEnv(gym.Env):
             self.screen = pygame.display.set_mode((int(self.L * self.scale), int(self.L * self.scale)))
             self.clock = pygame.time.Clock()
 
-        self.screen.fill((255, 255, 255))  # white background
+        # beige/tan background (sand/dirt map)
+        self.screen.fill((230, 200, 150))
 
-        # draw target region
+        # draw target region (blue square)
         target_rect = pygame.Rect(
             int((self.goal[0] - self.T/2) * self.scale),
             int((self.goal[1] - self.T/2) * self.scale),
             int(self.T * self.scale),
             int(self.T * self.scale)
         )
-        pygame.draw.rect(self.screen, (0, 255, 0), target_rect)  # green target region
+        pygame.draw.rect(self.screen, (0, 0, 200), target_rect)
 
-        # draw boulders
-        for b in self.boulders:
-            try:
-                bx, by = b[0], b[1]
-                br = b[2] if len(b) > 2 else self.R
-            except Exception:
-                bx, by = b
-                br = self.R
-            pygame.draw.circle(
-                self.screen,
-                (128, 128, 128),  # gray boulders
-                (int(bx * self.scale), int(by * self.scale)),
-                int(br * self.scale)
-            )
+        # draw boulders (brown) and danger areas (black outlines)
+        for bx, by in self.boulders:
+            center_px = (int(bx * self.scale), int(by * self.scale))
+            radius_px = int(self.R * self.scale)
+            # filled boulder: brown
+            pygame.draw.circle(self.screen, (150, 75, 0), center_px, radius_px)
+            # danger area: outline in black (radius = R + W)
+            danger_radius_m = self.R + self.W
+            danger_radius_px = int(danger_radius_m * self.scale)
+            if danger_radius_px > radius_px:
+                pygame.draw.circle(self.screen, (0, 0, 0), center_px, danger_radius_px, width=2)
 
-        # draw rover with a clear heading cue
+        # draw rover as a gray square
         rover_size = int(self.W * self.scale)
         rover_surface = pygame.Surface((rover_size, rover_size), pygame.SRCALPHA)
-        pygame.draw.rect(rover_surface, (0, 0, 255), rover_surface.get_rect())  # blue rover body
-
-        center = (rover_size // 2, rover_size // 2)
-        nose_length = rover_size // 2
-        nose_end = (min(rover_size - 1, rover_size // 2 + nose_length), rover_size // 2)
-        pygame.draw.line(rover_surface, (255, 255, 255), center, nose_end, 4)
-        pygame.draw.polygon(
-            rover_surface,
-            (255, 215, 0),
-            [
-                (min(rover_size - 1, rover_size // 2 + nose_length), rover_size // 2),
-                (max(0, rover_size // 2 + nose_length - 12), rover_size // 2 - 6),
-                (max(0, rover_size // 2 + nose_length - 12), rover_size // 2 + 6),
-            ],
-        )
+        pygame.draw.rect(rover_surface, (200, 200, 200), rover_surface.get_rect())  # gray
 
         rotated_rover = pygame.transform.rotate(rover_surface, -math.degrees(self.theta))
         rover_rect = rotated_rover.get_rect(center=(int(self.x * self.scale), int(self.y * self.scale)))
         self.screen.blit(rotated_rover, rover_rect)
 
+        # draw velocity arrow (green) from rover center in heading direction
+        try:
+            v = float(getattr(self, 'v', 0.0))
+        except Exception:
+            v = 0.0
+        arrow_length_px = int(max(6, v * self.scale * 4))  # scale so small v still visible
+        cx, cy = int(self.x * self.scale), int(self.y * self.scale)
+        end_x = int(cx + arrow_length_px * math.cos(self.theta))
+        end_y = int(cy + arrow_length_px * math.sin(self.theta))
+        pygame.draw.line(self.screen, (0, 200, 0), (cx, cy), (end_x, end_y), width=3)
+        # arrowhead
+        ah_size = max(6, arrow_length_px // 4)
+        left = (int(end_x - ah_size * math.cos(self.theta - math.pi / 6)), int(end_y - ah_size * math.sin(self.theta - math.pi / 6)))
+        right = (int(end_x - ah_size * math.cos(self.theta + math.pi / 6)), int(end_y - ah_size * math.sin(self.theta + math.pi / 6)))
+        pygame.draw.polygon(self.screen, (0, 200, 0), [(end_x, end_y), left, right])
+
         if self.render_mode == "human":
             pygame.display.flip()
             self.clock.tick(self.metadata["render_fps"])
+        elif self.render_mode == "rgb_array":
+            # return RGB array if needed (optional)
+            return pygame.surfarray.array3d(self.screen)

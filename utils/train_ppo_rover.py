@@ -5,10 +5,14 @@ import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from envs.rover_env import RoverEnv
+
 
 def make_env(render_mode=None, env_params=None):
     def _init():
@@ -16,6 +20,8 @@ def make_env(render_mode=None, env_params=None):
             env = RoverEnv(render_mode=render_mode)
         else:
             env = RoverEnv(render_mode=render_mode, **env_params)
+        # Wrap with Monitor to record episode info in `infos`
+        env = Monitor(env)
         return env
     return _init
 
@@ -30,6 +36,38 @@ def load_config(config_path=None):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
+
+'''
+Class to collect episode rewards during training by accessing the `infos` returned by VecEnv steps. This allows us to compute statistics on episode rewards after training completes.
+'''
+class EpisodeStatsCallback(BaseCallback):
+    """
+    collect episode rewards from the `infos` returned by VecEnv steps.
+    Appends each finished episode's reward to `episode_rewards`.
+    """
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.episode_rewards = []
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get('infos', [])
+        for info in infos:
+            ep = info.get('episode')
+            if ep is not None:
+                # 'r' contains the cumulative reward for the episode
+                try:
+                    ep_r = float(ep.get('r', 0.0))
+                    self.episode_rewards.append(ep_r)
+                    # Record to SB3 logger so TensorBoard (if enabled) will receive the scalar
+                    try:
+                        # use a common tag name used by SB3/TensorBoard
+                        self.logger.record('rollout/ep_rew_mean', ep_r)
+                        # flush/dump will be handled by SB3's logger lifecycle
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        return True
 
 
 def main(config_path=None):
@@ -114,6 +152,7 @@ def main(config_path=None):
         ppo_cfg.get('policy', 'MlpPolicy'),
         env,
         verbose=training_cfg.get('verbose', 1),
+        tensorboard_log=training_cfg.get('tensorboard_log', 'runs/'),
         learning_rate=learning_rate,
         n_steps=ppo_cfg.get('n_steps', 2048),
         batch_size=ppo_cfg.get('batch_size', 64),
@@ -136,11 +175,15 @@ def main(config_path=None):
         save_vecnormalize=checkpoint_cfg.get('save_vecnormalize', True),
     )
 
+    # Episode stats callback to collect per-episode rewards
+    es_cb = EpisodeStatsCallback()
+    cb_list = CallbackList([checkpoint_callback, es_cb])
+
     # train the agent
     try:
         model.learn(
             total_timesteps=total_timesteps,
-            callback=checkpoint_callback,
+            callback=cb_list,
             progress_bar=training_cfg.get('progress_bar', True),
         )
     except Exception as e:
@@ -149,6 +192,21 @@ def main(config_path=None):
         raise RuntimeError(f"Training failed: {type(e).__name__}: {e}") from e
 
     # save the final model and vecnormalize stats
+    # Compute and persist episode reward statistics collected during training
+    try:
+        if hasattr(es_cb, 'episode_rewards') and len(es_cb.episode_rewards) > 0:
+            mean_r = np.mean(es_cb.episode_rewards)
+            std_r = np.std(es_cb.episode_rewards)
+            print(f"Episode reward mean: {mean_r:.3f}, std: {std_r:.3f}")
+            stats_file = output_cfg.get('stats_file', './ppo_rover_checkpoints/episode_stats.txt')
+            try:
+                with open(stats_file, 'w') as f:
+                    f.write(f"mean,std\n{mean_r:.6f},{std_r:.6f}\n")
+            except Exception:
+                print(f"Warning: could not write stats to {stats_file}")
+    except Exception:
+        pass
+
     model.save(config['output']['final_model_name'])
     env.save(config['output']['vecnormalize_stats_name'])
 
