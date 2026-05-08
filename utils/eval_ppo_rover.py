@@ -7,6 +7,7 @@ import pygame
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -107,6 +108,8 @@ def main(config_path=None):
     obs = env.reset()
     window_open = True
     episode = 0
+    episode_rewards = []
+    ep_reward = 0.0
     
     for _ in range(50):
         if not window_open:
@@ -114,21 +117,32 @@ def main(config_path=None):
         episode += 1
         done = False
         steps = 0
-        
+
         while not done:
             # Handle pygame events to keep window responsive
             window_open = handle_pygame_events()
             if not window_open:
                 break
-            
+
             action, _states = model.predict(obs, deterministic=True)
-            obs, _, done, _ = env.step(action)
+            obs, reward, done, _ = env.step(action)
+            # reward may be an array (VecEnv); convert to scalar
+            try:
+                r = float(np.asarray(reward).reshape(-1)[0])
+            except Exception:
+                r = float(reward)
+            ep_reward += r
             steps += 1
             time.sleep(0.01)  # reduce sleep time to allow more frequent event handling
-        
+
         if window_open:
+            episode_rewards.append(ep_reward)
+            print(f"Episode {episode} completed ({steps} steps) reward={ep_reward:.3f}")
+            ep_reward = 0.0
             obs = env.reset()
-            print(f"Episode {episode} completed ({steps} steps)")
+
+    if len(episode_rewards) > 0:
+        print(f"\nEvaluation reward mean: {np.mean(episode_rewards):.3f}, std: {np.std(episode_rewards):.3f}")
 
     print("\nEvaluation finished!")
     env.close()
