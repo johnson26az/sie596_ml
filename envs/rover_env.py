@@ -162,6 +162,10 @@ class RoverEnv(gym.Env):
         v = self.wr * (omega_R + omega_L) / 2.0
         omega = self.wr * (omega_R - omega_L) / self.rW
 
+        # store current velocities for rendering
+        self.v = v
+        self.omega = omega
+
         # save old position for reward shaping
         self.old_x, self.old_y = self.x, self.y
 
@@ -382,49 +386,58 @@ class RoverEnv(gym.Env):
             self.screen = pygame.display.set_mode((int(self.L * self.scale), int(self.L * self.scale)))
             self.clock = pygame.time.Clock()
 
-        self.screen.fill((255, 255, 255))  # white background
+        # beige/tan background (sand/dirt map)
+        self.screen.fill((230, 200, 150))
 
-        # draw target region
+        # draw target region (blue square)
         target_rect = pygame.Rect(
             int((self.goal[0] - self.T/2) * self.scale),
             int((self.goal[1] - self.T/2) * self.scale),
             int(self.T * self.scale),
             int(self.T * self.scale)
         )
-        pygame.draw.rect(self.screen, (0, 255, 0), target_rect)  # green target region
+        pygame.draw.rect(self.screen, (0, 0, 200), target_rect)
 
-        # draw boulders
+        # draw boulders (brown) and danger areas (black outlines)
         for bx, by in self.boulders:
-            pygame.draw.circle(
-                self.screen,
-                (128, 128, 128),  # gray boulders
-                (int(bx * self.scale), int(by * self.scale)),
-                int(self.R * self.scale)
-            )
+            center_px = (int(bx * self.scale), int(by * self.scale))
+            radius_px = int(self.R * self.scale)
+            # filled boulder: brown
+            pygame.draw.circle(self.screen, (150, 75, 0), center_px, radius_px)
+            # danger area: outline in black (radius = R + W)
+            danger_radius_m = self.R + self.W
+            danger_radius_px = int(danger_radius_m * self.scale)
+            if danger_radius_px > radius_px:
+                pygame.draw.circle(self.screen, (0, 0, 0), center_px, danger_radius_px, width=2)
 
-        # draw rover with a clear heading cue
+        # draw rover as a gray square
         rover_size = int(self.W * self.scale)
         rover_surface = pygame.Surface((rover_size, rover_size), pygame.SRCALPHA)
-        pygame.draw.rect(rover_surface, (0, 0, 255), rover_surface.get_rect())  # blue rover body
-
-        center = (rover_size // 2, rover_size // 2)
-        nose_length = rover_size // 2
-        nose_end = (min(rover_size - 1, rover_size // 2 + nose_length), rover_size // 2)
-        pygame.draw.line(rover_surface, (255, 255, 255), center, nose_end, 4)
-        pygame.draw.polygon(
-            rover_surface,
-            (255, 215, 0),
-            [
-                (min(rover_size - 1, rover_size // 2 + nose_length), rover_size // 2),
-                (max(0, rover_size // 2 + nose_length - 12), rover_size // 2 - 6),
-                (max(0, rover_size // 2 + nose_length - 12), rover_size // 2 + 6),
-            ],
-        )
+        pygame.draw.rect(rover_surface, (200, 200, 200), rover_surface.get_rect())  # gray
 
         rotated_rover = pygame.transform.rotate(rover_surface, -math.degrees(self.theta))
         rover_rect = rotated_rover.get_rect(center=(int(self.x * self.scale), int(self.y * self.scale)))
         self.screen.blit(rotated_rover, rover_rect)
 
+        # draw velocity arrow (green) from rover center in heading direction
+        try:
+            v = float(getattr(self, 'v', 0.0))
+        except Exception:
+            v = 0.0
+        arrow_length_px = int(max(6, v * self.scale * 4))  # scale so small v still visible
+        cx, cy = int(self.x * self.scale), int(self.y * self.scale)
+        end_x = int(cx + arrow_length_px * math.cos(self.theta))
+        end_y = int(cy + arrow_length_px * math.sin(self.theta))
+        pygame.draw.line(self.screen, (0, 200, 0), (cx, cy), (end_x, end_y), width=3)
+        # arrowhead
+        ah_size = max(6, arrow_length_px // 4)
+        left = (int(end_x - ah_size * math.cos(self.theta - math.pi / 6)), int(end_y - ah_size * math.sin(self.theta - math.pi / 6)))
+        right = (int(end_x - ah_size * math.cos(self.theta + math.pi / 6)), int(end_y - ah_size * math.sin(self.theta + math.pi / 6)))
+        pygame.draw.polygon(self.screen, (0, 200, 0), [(end_x, end_y), left, right])
+
         if self.render_mode == "human":
             pygame.display.flip()
             self.clock.tick(self.metadata["render_fps"])
+        elif self.render_mode == "rgb_array":
+            # return RGB array if needed (optional)
+            return pygame.surfarray.array3d(self.screen)
