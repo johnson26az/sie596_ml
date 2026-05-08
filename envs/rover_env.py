@@ -52,6 +52,8 @@ class RoverEnv(gym.Env):
         self.goal = None # target region center (x_T, y_T)
         self.prev_v = 0.0 # previous forward velocity for reward shaping
         self.prev_theta = 0.0 # previous heading for reward shaping
+        self.prev_u_R = 0.0 # previous right wheel command for action smoothness
+        self.prev_u_L = 0.0 # previous left wheel command for action smoothness
 
         # action space [u_R, u_L]: normalized wheel angular commands (right, left) in [-1,1]
         self.action_space = spaces.Box(
@@ -136,6 +138,8 @@ class RoverEnv(gym.Env):
         self.sim_time = 0.0
         self.prev_v = 0.0
         self.prev_theta = self.theta
+        self.prev_u_R = 0.0
+        self.prev_u_L = 0.0
 
         obs = self._get_obs()
 
@@ -229,20 +233,26 @@ class RoverEnv(gym.Env):
 
         # penalize when reversing direction (encourage the rover to maintain a consistent heading towards the target)
         if np.sign(v) != np.sign(self.prev_v):
-            reward -= 0.2  # penalty for reversing direction
+            reward -= 0.75  # increased penalty for reversing direction
         self.prev_v = v
 
-        # penalized for large angular velocity (encourage smoother trajectories)
-        reward -= 0.05 * abs(omega)
+        # penalized for large angular velocity (encourage smoother trajectories) - INCREASED
+        reward -= 0.15 * abs(omega)
 
         # penalized for rapid heading changes (encourage smoother trajectories)
         heading_change = abs(self.theta - getattr(self, "prev_theta", self.theta))
-        reward -= 0.01 * heading_change
+        reward -= 0.05 * heading_change
         self.prev_theta = self.theta
 
+        # penalize action smoothness (rapid changes in steering commands)
+        action_smoothness = abs(u_R - self.prev_u_R) + abs(u_L - self.prev_u_L)
+        reward -= 0.15 * action_smoothness
+        self.prev_u_R = u_R
+        self.prev_u_L = u_L
+
         # bonus for consistent forward movement (encourage the rover to maintain a consistent heading towards the target)\
-        if v > 0:
-            reward += 0.05 * alignment  # small bonus for facing towards the target when moving forward
+        if v > 0 and alignment > 0.3:
+            reward += 0.08 * alignment  # bonus for facing and moving towards target (only if well-aligned)
 
 
 

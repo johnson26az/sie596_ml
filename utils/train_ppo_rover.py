@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from envs.rover_env import RoverEnv
 
+
 def make_env(render_mode=None, env_params=None):
     def _init():
         if env_params is None:
@@ -40,8 +41,8 @@ def load_config(config_path=None):
 Class to collect episode rewards during training by accessing the `infos` returned by VecEnv steps. This allows us to compute statistics on episode rewards after training completes.
 '''
 class EpisodeStatsCallback(BaseCallback):
-    """Collect episode rewards from the `infos` returned by VecEnv steps.
-
+    """
+    collect episode rewards from the `infos` returned by VecEnv steps.
     Appends each finished episode's reward to `episode_rewards`.
     """
     def __init__(self, verbose=0):
@@ -55,7 +56,15 @@ class EpisodeStatsCallback(BaseCallback):
             if ep is not None:
                 # 'r' contains the cumulative reward for the episode
                 try:
-                    self.episode_rewards.append(float(ep.get('r', 0.0)))
+                    ep_r = float(ep.get('r', 0.0))
+                    self.episode_rewards.append(ep_r)
+                    # Record to SB3 logger so TensorBoard (if enabled) will receive the scalar
+                    try:
+                        # use a common tag name used by SB3/TensorBoard
+                        self.logger.record('rollout/ep_rew_mean', ep_r)
+                        # flush/dump will be handled by SB3's logger lifecycle
+                    except Exception:
+                        pass
                 except Exception:
                     pass
         return True
@@ -143,6 +152,7 @@ def main(config_path=None):
         ppo_cfg.get('policy', 'MlpPolicy'),
         env,
         verbose=training_cfg.get('verbose', 1),
+        tensorboard_log=training_cfg.get('tensorboard_log', 'runs/'),
         learning_rate=learning_rate,
         n_steps=ppo_cfg.get('n_steps', 2048),
         batch_size=ppo_cfg.get('batch_size', 64),

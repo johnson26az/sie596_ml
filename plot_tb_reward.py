@@ -13,7 +13,7 @@ def load_scalar_from_eventdir(event_dir, tag=None):
     if not files:
         raise FileNotFoundError(f'No events files found under {event_dir}')
     files.sort(key=os.path.getmtime)
-    ea = EventAccumulator(files[-1], size_guidance={EventAccumulator.SCALARS: 0})
+    ea = EventAccumulator(files[-1], size_guidance={})
     ea.Reload()
     tags = ea.Tags().get('scalars', [])
     if tag is None:
@@ -28,7 +28,9 @@ def load_scalar_from_eventdir(event_dir, tag=None):
     values = np.array([e.value for e in events], dtype=np.float64)
     return steps, values, tag
 
-
+'''
+finding the event files 
+'''
 def find_event_files(event_dir):
     files = glob.glob(os.path.join(event_dir, '**', 'events*'), recursive=True)
     files.sort(key=os.path.getmtime)
@@ -39,7 +41,7 @@ def list_scalar_tags(event_dir):
     files = find_event_files(event_dir)
     if not files:
         return []
-    ea = EventAccumulator(files[-1], size_guidance={EventAccumulator.SCALARS: 0})
+    ea = EventAccumulator(files[-1], size_guidance={})
     ea.Reload()
     return ea.Tags().get('scalars', [])
 
@@ -61,6 +63,50 @@ def plot_reward_trend(event_dir, out_path='reward_trend.png', tag=None, smooth_w
     plt.savefig(out_path, dpi=200)
     plt.close()
     print(f'Saved plot to {out_path} (tag={tag})')
+
+    # Also ensure a copy is saved inside the event/log directory
+    try:
+        if os.path.isdir(event_dir):
+            # derive filename from tag and extension
+            base_ext = os.path.splitext(out_path)[1]
+            safe_tag = tag.replace('/', '_') if tag else 'reward'
+            run_path = os.path.join(event_dir, f'{safe_tag}_reward_trend{base_ext}')
+            # if not already same path, save a copy
+            if os.path.abspath(run_path) != os.path.abspath(out_path):
+                plt.figure(figsize=(10,5))
+                plt.plot(steps, vals, linewidth=1.5)
+                plt.xlabel('Training steps')
+                plt.ylabel('Mean episode reward')
+                plt.title('Mean episode reward vs training steps')
+                plt.grid(alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(run_path, dpi=200)
+                plt.close()
+                print(f'Also saved plot to {run_path}')
+    except Exception:
+        pass
+
+    # ensure a copy is saved in the repository 'runs/' root for easy discovery
+    try:
+        runs_root = os.path.join(os.getcwd(), 'runs')
+        if not os.path.isdir(runs_root):
+            os.makedirs(runs_root, exist_ok=True)
+        base_ext = os.path.splitext(out_path)[1]
+        safe_tag = tag.replace('/', '_') if tag else 'reward'
+        runs_root_path = os.path.join(runs_root, f'{safe_tag}_reward_trend{base_ext}')
+        if os.path.abspath(runs_root_path) != os.path.abspath(out_path):
+            plt.figure(figsize=(10,5))
+            plt.plot(steps, vals, linewidth=1.5)
+            plt.xlabel('Training steps')
+            plt.ylabel('Mean episode reward')
+            plt.title('Mean episode reward vs training steps')
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(runs_root_path, dpi=200)
+            plt.close()
+            print(f'Also saved plot to {runs_root_path}')
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':
