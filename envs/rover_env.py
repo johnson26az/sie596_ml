@@ -210,7 +210,6 @@ class RoverEnv(gym.Env):
         self.sim_time += self.dt
 
 
-
         # reward shaping: reward for getting closer to the target region compared to the previous step
         # computing the reward
         reward = 0.0

@@ -11,25 +11,26 @@ environment:
   omega_max: 2.0                 # maximum angular velocity (radians/step)
   delta_t: 0.1                   # time step duration (seconds)
   max_time: 200.0                # maximum episode duration (seconds)
+
   reward:
-    progress_scale: 5.5           # reward for reducing goal distance (increased)
-    time_penalty: 0.05            # per-step penalty to prefer shorter paths (reduced)
-    speed_bonus: 0.08             # mild bonus for moving forward (increased)
+    progress_scale: 5.5           # reward for reducing goal distance
+    time_penalty: 0.05            # per-step penalty to prefer shorter paths
+    speed_bonus: 0.08             # mild bonus for moving forward at a reasonable speed
     slow_speed_threshold: 0.08    # speed below this gets a penalty
-    slow_speed_penalty: 0.15      # penalty for moving too slowly (reduced)
-    boulder_penalty_scale: 1.5    # proximity penalty near boulders (reduced)
-    alignment_penalty: 0.03       # penalty for facing away from the target (reduced)
-    reverse_penalty: 0.3          # penalty for switching motion direction (reduced)
-    angular_penalty: 0.08         # penalty for high turning rates (reduced)
-    heading_change_penalty: 0.02  # penalty for rapid heading changes (reduced)
-    action_smoothness_penalty: 0.05 # penalty for abrupt control changes (reduced)
-    alignment_bonus: 0.15         # bonus for moving toward the target (increased)
-    goal_bonus: 250.0             # terminal reward for reaching the target (increased)
-    fast_finish_bonus: 150.0      # extra terminal reward for reaching it early (increased)
+    slow_speed_penalty: 0.15      # penalty for moving too slowly
+    boulder_penalty_scale: 1.5    # proximity penalty near boulders
+    alignment_penalty: 0.03       # penalty for facing away from the target
+    reverse_penalty: 0.3          # penalty for switching motion direction
+    angular_penalty: 0.08         # penalty for high turning rates
+    heading_change_penalty: 0.02  # penalty for rapid heading changes
+    action_smoothness_penalty: 0.05 # penalty for abrupt control changes
+    alignment_bonus: 0.15         # bonus for moving toward the target
+    goal_bonus: 250.0             # terminal reward for reaching the target
+    fast_finish_bonus: 150.0      # extra terminal reward for reaching it early
 
 # Training parameters
 training:
-  total_timesteps: 3000000
+  total_timesteps: 5000000
   verbose: 1
   progress_bar: true
   device: "auto"
