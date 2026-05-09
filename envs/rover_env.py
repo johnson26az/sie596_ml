@@ -12,7 +12,7 @@ class RoverEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-    def __init__(self, render_mode=None, l=None, W=None, N=None, R=None, r=None, rW=None, omega_max=None, delta_t=None, max_time_steps=None):
+    def __init__(self, render_mode=None, l=None, W=None, N=None, R=None, r=None, rW=None, omega_max=None, delta_t=None, max_time_steps=None, reward_params=None):
         super().__init__()
 
         # Use provided values or defaults - values should come from config
@@ -24,6 +24,7 @@ class RoverEnv(gym.Env):
         rW = rW if rW is not None else 2.0
         omega_max = omega_max if omega_max is not None else 2.0
         delta_t = delta_t if delta_t is not None else 0.1
+        reward_params = reward_params or {}
 
         # map dimensions
         self.L = l # length of the map L x L
@@ -76,6 +77,22 @@ class RoverEnv(gym.Env):
         self.min_target_dist = 1.5 * (2 * self.R + self.W) # minimum distance between the target region and any boulder
         self.min_boulder_dist = 1.5 * (2 * self.R + self.W) # minimum distance between any two boulders to avoid overlap
         self.max_time = max_time_steps if max_time_steps is not None else max_time
+
+        # reward shaping weights; tuned to favor earlier goal arrival
+        self.reward_progress_scale = float(reward_params.get('progress_scale', 4.5))
+        self.reward_time_penalty = float(reward_params.get('time_penalty', 0.08))
+        self.reward_speed_bonus = float(reward_params.get('speed_bonus', 0.06))
+        self.reward_slow_speed_threshold = float(reward_params.get('slow_speed_threshold', 0.08))
+        self.reward_slow_speed_penalty = float(reward_params.get('slow_speed_penalty', 0.25))
+        self.reward_boulder_penalty_scale = float(reward_params.get('boulder_penalty_scale', 2.0))
+        self.reward_alignment_penalty = float(reward_params.get('alignment_penalty', 0.05))
+        self.reward_reverse_penalty = float(reward_params.get('reverse_penalty', 0.5))
+        self.reward_angular_penalty = float(reward_params.get('angular_penalty', 0.10))
+        self.reward_heading_change_penalty = float(reward_params.get('heading_change_penalty', 0.03))
+        self.reward_action_smoothness_penalty = float(reward_params.get('action_smoothness_penalty', 0.08))
+        self.reward_alignment_bonus = float(reward_params.get('alignment_bonus', 0.10))
+        self.reward_goal_bonus = float(reward_params.get('goal_bonus', 200.0))
+        self.reward_fast_finish_bonus = float(reward_params.get('fast_finish_bonus', 120.0))
 
         # rendering parameters
         self.render_mode = render_mode
@@ -201,26 +218,26 @@ class RoverEnv(gym.Env):
         # distance to goal shaping
         old_dist = np.linalg.norm([self.old_x - self.goal[0], self.old_y - self.goal[1]])
         new_dist = np.linalg.norm([self.x - self.goal[0], self.y - self.goal[1]])
-        reward += 3.0 * (old_dist - new_dist)  # reward for getting closer to the target
+        reward += self.reward_progress_scale * (old_dist - new_dist)  # reward for getting closer to the target
 
         # boulder proximity penalty (encourage the rover to stay away from boulders)
         self.d_edge, _ = self._compute_boulder_features()
         if self.d_edge < 2.0:  # if the rover is within 2 meters of a boulder edge
-            reward -= (2.0 - self.d_edge) * 2.0  # penalty increases as the rover gets closer to the boulder
+            reward -= (2.0 - self.d_edge) * self.reward_boulder_penalty_scale  # penalty increases as the rover gets closer to the boulder
 
         # control effort penalty (encourage energy-efficient solutions)
         reward -= 0.001 * (u_R**2 + u_L**2)
 
         # time penalty (encourage faster solutions)
-        reward -= 0.05
+        reward -= self.reward_time_penalty
 
         # forward speed bonus (encourage the rover to keep moving forward)
         speed = abs(v)
-        reward += 0.1 * speed
+        reward += self.reward_speed_bonus * speed
 
         # penalty for being to slow (encourage the rover to maintain a minimum speed)
-        if speed < 0.05:
-            reward -= 0.5
+        if speed < self.reward_slow_speed_threshold:
+            reward -= self.reward_slow_speed_penalty
 
         # direction-consistent bonus (encourage the rover to maintain a consistent heading towards the target)
         self.goal_vector = np.array([self.goal[0] - self.x, self.goal[1] - self.y])
@@ -229,37 +246,38 @@ class RoverEnv(gym.Env):
 
         # penalize when facing away from the target and reward when facing towards the target
         if alignment < 0:
-            reward -= 0.1  # small penalty for facing away from the target
+            reward -= self.reward_alignment_penalty  # small penalty for facing away from the target
 
         # penalize when reversing direction (encourage the rover to maintain a consistent heading towards the target)
         if np.sign(v) != np.sign(self.prev_v):
-            reward -= 0.75  # increased penalty for reversing direction
+            reward -= self.reward_reverse_penalty  # increased penalty for reversing direction
         self.prev_v = v
 
         # penalized for large angular velocity (encourage smoother trajectories) - INCREASED
-        reward -= 0.15 * abs(omega)
+        reward -= self.reward_angular_penalty * abs(omega)
 
         # penalized for rapid heading changes (encourage smoother trajectories)
         heading_change = abs(self.theta - getattr(self, "prev_theta", self.theta))
-        reward -= 0.05 * heading_change
+        reward -= self.reward_heading_change_penalty * heading_change
         self.prev_theta = self.theta
 
         # penalize action smoothness (rapid changes in steering commands)
         action_smoothness = abs(u_R - self.prev_u_R) + abs(u_L - self.prev_u_L)
-        reward -= 0.15 * action_smoothness
+        reward -= self.reward_action_smoothness_penalty * action_smoothness
         self.prev_u_R = u_R
         self.prev_u_L = u_L
 
         # bonus for consistent forward movement (encourage the rover to maintain a consistent heading towards the target)\
         if v > 0 and alignment > 0.3:
-            reward += 0.08 * alignment  # bonus for facing and moving towards target (only if well-aligned)
+            reward += self.reward_alignment_bonus * alignment  # bonus for facing and moving towards target (only if well-aligned)
 
 
 
         # termination conditions
         # target check
         if self._in_target_region():
-            reward = 200.0
+            finish_fraction = max(0.0, 1.0 - (self.sim_time / max(self.max_time, 1e-6)))
+            reward += self.reward_goal_bonus + (self.reward_fast_finish_bonus * finish_fraction)
             terminated = True
 
         # collision check

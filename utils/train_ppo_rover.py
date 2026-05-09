@@ -125,6 +125,7 @@ def main(config_path=None):
         'omega_max': env_cfg.get('omega_max', 2.0),
         'delta_t': env_cfg.get('delta_t', 0.1),
         'max_time_steps': env_cfg.get('max_time', 200.0),
+        'reward_params': env_cfg.get('reward', {}),
     }
 
     # Create multiple environments
@@ -163,6 +164,7 @@ def main(config_path=None):
         ent_coef=ppo_cfg.get('ent_coef', 0.0),
         vf_coef=ppo_cfg.get('vf_coef', 0.5),
         max_grad_norm=ppo_cfg.get('max_grad_norm', 0.5),
+        target_kl=ppo_cfg.get('target_kl', None),
         device=training_cfg.get('device', 'auto'),
     )
 

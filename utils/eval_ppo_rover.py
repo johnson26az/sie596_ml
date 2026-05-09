@@ -7,6 +7,7 @@ import pygame
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.monitor import Monitor
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,6 +23,7 @@ def make_env(render_mode="human", env_params=None):
             env = RoverEnv(render_mode=render_mode)
         else:
             env = RoverEnv(render_mode=render_mode, **env_params)
+        env = Monitor(env)
         return env
     return _init
 
@@ -92,6 +94,7 @@ def main(config_path=None):
         'omega_max': env_cfg.get('omega_max', 2.0),
         'delta_t': env_cfg.get('delta_t', 0.1),
         'max_time_steps': env_cfg.get('max_time', 200.0),
+        'reward_params': env_cfg.get('reward', {}),
     }
     
     # vectorized environment
@@ -99,6 +102,8 @@ def main(config_path=None):
 
     # normalized observations and rewards
     env = VecNormalize.load(vecnorm_path, env)
+    env.training = False
+    env.norm_reward = False
 
     # load the trained agent
     model = PPO.load(model_path, env=env)
@@ -125,8 +130,8 @@ def main(config_path=None):
                 break
 
             action, _states = model.predict(obs, deterministic=True)
-            obs, reward, done, _ = env.step(action)
-            # reward may be an array (VecEnv); convert to scalar
+            obs, reward, done, infos = env.step(action)
+            # reward may be normalized by VecNormalize; convert to scalar for display only
             try:
                 r = float(np.asarray(reward).reshape(-1)[0])
             except Exception:
@@ -136,8 +141,13 @@ def main(config_path=None):
             time.sleep(0.01)  # reduce sleep time to allow more frequent event handling
 
         if window_open:
-            episode_rewards.append(ep_reward)
-            print(f"Episode {episode} completed ({steps} steps) reward={ep_reward:.3f}")
+            raw_ep_reward = ep_reward
+            try:
+                raw_ep_reward = float(infos[0].get("episode", {}).get("r", raw_ep_reward))
+            except Exception:
+                pass
+            episode_rewards.append(raw_ep_reward)
+            print(f"Episode {episode} completed ({steps} steps) raw_reward={raw_ep_reward:.3f}")
             ep_reward = 0.0
             obs = env.reset()
 

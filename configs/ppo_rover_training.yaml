@@ -11,10 +11,25 @@ environment:
   omega_max: 2.0                 # maximum angular velocity (radians/step)
   delta_t: 0.1                   # time step duration (seconds)
   max_time: 200.0                # maximum episode duration (seconds)
+  reward:
+    progress_scale: 5.5           # reward for reducing goal distance (increased)
+    time_penalty: 0.05            # per-step penalty to prefer shorter paths (reduced)
+    speed_bonus: 0.08             # mild bonus for moving forward (increased)
+    slow_speed_threshold: 0.08    # speed below this gets a penalty
+    slow_speed_penalty: 0.15      # penalty for moving too slowly (reduced)
+    boulder_penalty_scale: 1.5    # proximity penalty near boulders (reduced)
+    alignment_penalty: 0.03       # penalty for facing away from the target (reduced)
+    reverse_penalty: 0.3          # penalty for switching motion direction (reduced)
+    angular_penalty: 0.08         # penalty for high turning rates (reduced)
+    heading_change_penalty: 0.02  # penalty for rapid heading changes (reduced)
+    action_smoothness_penalty: 0.05 # penalty for abrupt control changes (reduced)
+    alignment_bonus: 0.15         # bonus for moving toward the target (increased)
+    goal_bonus: 250.0             # terminal reward for reaching the target (increased)
+    fast_finish_bonus: 150.0      # extra terminal reward for reaching it early (increased)
 
 # Training parameters
 training:
-  total_timesteps: 1000000
+  total_timesteps: 3000000
   verbose: 1
   progress_bar: true
   device: "auto"
@@ -25,22 +40,23 @@ training:
 ppo_model:
   policy: "MlpPolicy"
   learning_rate: 2e-4
-  n_steps: 768                   # number of steps to run for each environment per update
-  batch_size: 384
-  n_epochs: 15
-  gamma: 0.995                   # discount factor
-  gae_lambda: 0.92               # GAE lambda parameter
-  clip_range: 0.15                # clipping range for policy gradient
-  ent_coef: 0.001                  # entropy coefficient
-  vf_coef: 0.6                   # value function coefficient
-  max_grad_norm: 0.4             # max gradient norm for clipping
+  n_steps: 1024                  # number of steps to run for each environment per update
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.995                   # discount factor; keeps goal-seeking behavior stronger over longer horizons
+  gae_lambda: 0.95               # GAE lambda parameter (standard for navigation)
+  clip_range: 0.15               # clipping range for policy gradient
+  ent_coef: 0.002                # lower entropy to reduce back-and-forth exploration
+  vf_coef: 0.5                   # value function coefficient
+  max_grad_norm: 0.5             # max gradient norm for clipping
+  target_kl: 0.03                # stop overly large policy updates that can destabilize navigation
 
 # VecNormalize parameters (for observation and reward normalization)
 vec_normalize:
   norm_obs: true                 # normalize observations
   norm_reward: true              # normalize rewards
   clip_obs: 10.0                 # observation clipping value
-  clip_reward: 10.0              # reward clipping value
+  clip_reward: 100.0             # reward clipping value (increased to preserve terminal bonuses)
 
 # Checkpoint callback parameters
 checkpoint:
